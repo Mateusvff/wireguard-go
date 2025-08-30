@@ -49,8 +49,10 @@ type Device struct {
 
 	staticIdentity struct {
 		sync.RWMutex
-		privateKey NoisePrivateKey
-		publicKey  NoisePublicKey
+		privateKey      NoisePrivateKey
+		publicKey       NoisePublicKey
+		mlkemPrivateKey MLKEMPrivateKey
+		mlkemPublicKey  MLKEMPublicKey
 	}
 
 	peers struct {
