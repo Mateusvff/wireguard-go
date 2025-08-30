@@ -218,6 +218,7 @@ type Handshake struct {
 	localIndex                uint32                   // used to clear hash-table
 	remoteIndex               uint32                   // index for sending
 	remoteStatic              NoisePublicKey           // long term key
+	remoteMLKEMStatic         MLKEMPublicKey           // long term remote ML-KEM static public key
 	remoteEphemeral           NoisePublicKey           // ephemeral public key
 	precomputedStaticStatic   [NoisePublicKeySize]byte // precomputed shared secret
 	lastTimestamp             tai64n.Timestamp
