@@ -391,7 +391,9 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 	if err != nil {
 		return nil
 	}
-	KDF2(&chainKey, &key, chainKey[:], ss[:])
+
+	var tempChainKey [blake2s.Size]byte
+	KDF2(&tempChainKey, &key, chainKey[:], ss[:])
 	aead, _ := chacha20poly1305.New(key[:])
 	_, err = aead.Open(peerPK[:0], ZeroNonce[:], msg.Static[:], hash[:])
 	if err != nil {
@@ -400,7 +402,6 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 	mixHash(&hash, &hash, msg.Static[:])
 
 	// lookup peer
-
 	peer := device.LookupPeer(peerPK)
 	if peer == nil || !peer.isRunning.Load() {
 		return nil
@@ -408,12 +409,39 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 
 	handshake := &peer.handshake
 
+	// decrypt KEM ciphertext
+	KDF1(&key, chainKey[:], []byte("pqc-ciphertext-key"))
+	aead, _ = chacha20poly1305.New(key[:])
+	var ciphertext [MLKEMCiphertextSize]byte
+	_, err = aead.Open(ciphertext[:0], ZeroNonce[:], msg.MLKEM[:], hash[:])
+	if err != nil {
+		return nil
+	}
+
+	mixHash(&hash, &hash, msg.MLKEM[:])
+
+	// post-quantum decapsulation
+	scheme := kyber1024.Scheme()
+	sk, err := scheme.UnmarshalBinaryPrivateKey(device.staticIdentity.mlkemPrivateKey[:])
+	if err != nil {
+		return nil
+	}
+
+	mlkemSecret, err := scheme.Decapsulate(sk, ciphertext[:])
+	if err != nil {
+		return nil
+	}
+
+	// mix classic (ss) and post-quantum secret (mlkemSecret) into a single secret
+	var combinedSecret [blake2s.Size]byte
+	KDF2(&combinedSecret, nil, ss[:], mlkemSecret)
+
+	// main chainKey is now updated with the combined secret
+	KDF2(&chainKey, &key, chainKey[:], combinedSecret[:])
+
 	// verify identity
-
 	var timestamp tai64n.Timestamp
-
 	handshake.mutex.RLock()
-
 	if isZero(handshake.precomputedStaticStatic[:]) {
 		handshake.mutex.RUnlock()
 		return nil
@@ -424,16 +452,17 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 		chainKey[:],
 		handshake.precomputedStaticStatic[:],
 	)
+	handshake.mutex.RUnlock()
+
 	aead, _ = chacha20poly1305.New(key[:])
 	_, err = aead.Open(timestamp[:0], ZeroNonce[:], msg.Timestamp[:], hash[:])
 	if err != nil {
-		handshake.mutex.RUnlock()
 		return nil
 	}
 	mixHash(&hash, &hash, msg.Timestamp[:])
 
 	// protect against replay & flood
-
+	handshake.mutex.RLock()
 	replay := !timestamp.After(handshake.lastTimestamp)
 	flood := time.Since(handshake.lastInitiationConsumption) <= HandshakeInitationRate
 	handshake.mutex.RUnlock()
@@ -447,9 +476,7 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 	}
 
 	// update handshake state
-
 	handshake.mutex.Lock()
-
 	handshake.hash = hash
 	handshake.chainKey = chainKey
 	handshake.remoteIndex = msg.Sender
@@ -462,7 +489,6 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 		handshake.lastInitiationConsumption = now
 	}
 	handshake.state = handshakeInitiationConsumed
-
 	handshake.mutex.Unlock()
 
 	setZero(hash[:])
