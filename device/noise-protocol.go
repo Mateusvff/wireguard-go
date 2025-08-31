@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudflare/circl/kem/kyber/kyber1024"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"
@@ -298,19 +299,44 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 	handshake.mixKey(msg.Ephemeral[:])
 	handshake.mixHash(msg.Ephemeral[:])
 
+	// post-quantum encapsulation
+	scheme := kyber1024.Scheme()
+	pk, err := scheme.UnmarshalBinaryPublicKey(handshake.remoteMLKEMStatic[:])
+	if err != nil {
+		return nil, err
+	}
+
+	ciphertext, mlkemSecret, err := scheme.Encapsulate(pk)
+	if err != nil {
+		return nil, err
+	}
+
+	// encrypy KEM ciphertext and mix into handshake hash
+	var key [chacha20poly1305.KeySize]byte
+	KDF1(&key, handshake.chainKey[:], []byte("pqc-ciphertext-key"))
+	aead, _ := chacha20poly1305.New(key[:])
+	aead.Seal(msg.MLKEM[:0], ZeroNonce[:], ciphertext, handshake.hash[:])
+	handshake.mixHash(msg.MLKEM[:])
+
 	// encrypt static key
 	ss, err := handshake.localEphemeral.sharedSecret(handshake.remoteStatic)
 	if err != nil {
 		return nil, err
 	}
-	var key [chacha20poly1305.KeySize]byte
+
+	// mix classic (ss) and post-quantum secret (mlkemSecret) into a single secret
+	var combinedSecret [blake2s.Size]byte
+	KDF2(&combinedSecret, nil, ss[:], mlkemSecret)
+
+	// from this point on, use the combined secret to feed the Noise KDF
 	KDF2(
 		&handshake.chainKey,
 		&key,
 		handshake.chainKey[:],
-		ss[:],
+		combinedSecret[:],
 	)
-	aead, _ := chacha20poly1305.New(key[:])
+
+	aead, _ = chacha20poly1305.New(key[:])
 	aead.Seal(msg.Static[:0], ZeroNonce[:], device.staticIdentity.publicKey[:], handshake.hash[:])
 	handshake.mixHash(msg.Static[:])
 
