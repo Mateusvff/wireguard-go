@@ -78,6 +78,30 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	// create peer
 	peer := new(Peer)
 
+	// Gerar chave Noise para o peer
+    peer.privateKey, err := newPrivateKey()  // Geração da chave privada Noise
+    if err != nil {
+        return nil, fmt.Errorf("falha ao gerar chave privada Noise: %v", err)
+    }
+    peer.publicKey = peer.privateKey.publicKey()  // Gerar chave pública associada
+
+    // Verificar se a chave pública Noise foi gerada corretamente
+    if peer.publicKey == (NoisePublicKey{}) {
+        return nil, fmt.Errorf("falha ao gerar chave pública Noise para o Peer")
+    }
+
+    // Gerar chave Kyber para o peer
+    peer.mlkemPrivateKey, err = newKyberPrivateKey()  // Geração da chave privada Kyber
+    if err != nil {
+        return nil, fmt.Errorf("falha ao gerar chave privada Kyber: %v", err)
+    }
+    peer.mlkemPublicKey = *peer.mlkemPrivateKey.publicKey()  // Gerar chave pública associada
+
+    // Verificar se a chave pública Kyber foi gerada corretamente
+    if peer.mlkemPublicKey == (MLKEMPublicKey{}) {
+        return nil, fmt.Errorf("falha ao gerar chave pública Kyber para o Peer")
+    }
+
 	peer.cookieGenerator.Init(pk)
 	peer.device = device
 	peer.queue.outbound = newAutodrainingOutboundQueue(device)
@@ -90,12 +114,12 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 		return nil, errors.New("adding existing peer")
 	}
 
-	// pre-compute DH
+	//  pré-computa a chave de compartilhamento estático para o peer
 	handshake := &peer.handshake
-	handshake.mutex.Lock()
-	handshake.precomputedStaticStatic, _ = device.staticIdentity.privateKey.sharedSecret(pk)
-	handshake.remoteStatic = pk
-	handshake.mutex.Unlock()
+    handshake.mutex.Lock()
+    handshake.precomputedStaticStatic, _ = device.staticIdentity.privateKey.sharedSecret(pk)
+    handshake.remoteStatic = pk
+    handshake.mutex.Unlock()
 
 	// reset endpoint
 	peer.endpoint.Lock()

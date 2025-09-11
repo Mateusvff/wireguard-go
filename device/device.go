@@ -15,6 +15,12 @@ import (
 	"golang.zx2c4.com/wireguard/ratelimiter"
 	"golang.zx2c4.com/wireguard/rwcancel"
 	"golang.zx2c4.com/wireguard/tun"
+
+    "math/rand"  // Para usar rand.Read()
+    "github.com/cloudflare/circl/kem/kyber/kyber1024"  // Para usar o esquema Kyber1024
+    "golang.org/x/crypto/blake2s"  // Para hash BLAKE2s
+    "golang.org/x/crypto/chacha20poly1305"  // Para Chacha20Poly1305
+
 )
 
 type Device struct {
@@ -51,8 +57,8 @@ type Device struct {
 		sync.RWMutex
 		privateKey      NoisePrivateKey
 		publicKey       NoisePublicKey
-		mlkemPrivateKey MLKEMPrivateKey
-		mlkemPublicKey  MLKEMPublicKey
+		mlkemPrivateKey *kyber1024.PrivateKey
+		mlkemPublicKey  *kyber1024.PublicKey
 	}
 
 	peers struct {
@@ -261,7 +267,7 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	// update key material
 
 	device.staticIdentity.privateKey = sk
-	device.staticIdentity.publicKey = publicKey
+	device.staticIdentity.mlkemPrivateKey.Public()
 	device.cookieChecker.Init(publicKey)
 
 	// do static-static DH pre-computations
@@ -299,6 +305,21 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
 	device.peers.keyMap = make(map[NoisePublicKey]*Peer)
 	device.rate.limiter.Init()
 	device.indexTable.Init()
+
+	device.staticIdentity.privateKey, err = newPrivateKey()
+    if err != nil {
+        device.log.Errorf("Failed to generate Noise private key: %v", err)
+        return nil
+    }
+    device.staticIdentity.mlkemPublicKey = *device.staticIdentity.mlkemPrivateKey.PublicKey()
+
+    // Gerar o par de chaves Kyber para o dispositivo (se necessário)
+    device.staticIdentity.mlkemPrivateKey, err = newKyberPrivateKey()
+    if err != nil {
+        device.log.Errorf("Failed to generate Kyber private key: %v", err)
+        return nil
+    }
+    device.staticIdentity.mlkemPublicKey = *device.staticIdentity.mlkemPrivateKey.publicKey()
 
 	device.PopulatePools()
 

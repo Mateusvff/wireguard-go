@@ -12,15 +12,13 @@ import (
 	"errors"
 	"hash"
 
-	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/curve25519"
+	"github.com/cloudflare/circl/kem/kyber/kyber1024"  // Para manipular as chaves Kyber
+	"golang.org/x/crypto/blake2s"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
-/* KDF related functions.
- * HMAC-based Key Derivation Function (HKDF)
- * https://tools.ietf.org/html/rfc5869
- */
-
+// KDF-related functions: Implementing the Key Derivation Functions (KDF) using HMAC
 func HMAC1(sum *[blake2s.Size]byte, key, in0 []byte) {
 	mac := hmac.New(func() hash.Hash {
 		h, _ := blake2s.New256(nil)
@@ -62,6 +60,7 @@ func KDF3(t0, t1, t2 *[blake2s.Size]byte, key, input []byte) {
 	setZero(prk[:])
 }
 
+// Check if a byte array is zeroed out
 func isZero(val []byte) bool {
 	acc := 1
 	for _, b := range val {
@@ -70,39 +69,69 @@ func isZero(val []byte) bool {
 	return acc == 1
 }
 
-/* This function is not used as pervasively as it should because this is mostly impossible in Go at the moment */
+// Function to clear an array by setting all elements to zero
 func setZero(arr []byte) {
 	for i := range arr {
 		arr[i] = 0
 	}
 }
 
+// Private key generation for Noise using random bytes
+func newPrivateKey() (sk NoisePrivateKey, err error) {
+	_, err = rand.Read(sk[:])  // Gera uma chave privada aleatória Noise
+	sk.clamp()  // Aplica o clamping à chave privada Noise
+	return
+}
+
+// Clamp the Noise private key (this is part of the Noise protocol spec)
 func (sk *NoisePrivateKey) clamp() {
 	sk[0] &= 248
 	sk[31] = (sk[31] & 127) | 64
 }
 
-func newPrivateKey() (sk NoisePrivateKey, err error) {
-	_, err = rand.Read(sk[:])
-	sk.clamp()
-	return
-}
-
+// Deriving public key from private key for Noise protocol
 func (sk *NoisePrivateKey) publicKey() (pk NoisePublicKey) {
 	apk := (*[NoisePublicKeySize]byte)(&pk)
 	ask := (*[NoisePrivateKeySize]byte)(sk)
-	curve25519.ScalarBaseMult(apk, ask)
+	curve25519.ScalarBaseMult(apk, ask)  // Perform scalar base multiplication
 	return
 }
 
-var errInvalidPublicKey = errors.New("invalid public key")
+// Private key for Kyber1024
+func newKyberPrivateKey() (*kyber1024.PrivateKey, error) {
+    sk, pk, err := kyber1024.GenerateKeyPair(rand.Reader)  // Gera a chave privada Kyber1024
+    if err != nil {
+        return nil, nil, err
+    }
+    return sk, pk, nil
+}
 
+// Função para gerar a chave pública Kyber
+func (sk *kyber1024.PrivateKey) public() *kyber1024.PublicKey {
+    return &sk.PublicKey
+}
+
+
+// Shared secret calculation using Noise private key and Noise public key
 func (sk *NoisePrivateKey) sharedSecret(pk NoisePublicKey) (ss [NoisePublicKeySize]byte, err error) {
 	apk := (*[NoisePublicKeySize]byte)(&pk)
 	ask := (*[NoisePrivateKeySize]byte)(sk)
-	curve25519.ScalarMult(&ss, ask, apk)
+	curve25519.ScalarMult(&ss, ask, apk)  // Calculating the shared secret using scalar multiplication
 	if isZero(ss[:]) {
 		return ss, errInvalidPublicKey
 	}
 	return ss, nil
 }
+
+// Shared secret calculation for Kyber (using Kyber1024) private key and public key
+func (sk *kyber1024.PrivateKey) sharedSecret(pk kyber1024.PublicKey) (ss [kyber1024.PublicKeySize]byte, err error) {
+	// We perform Kyber decapsulation here
+	ss, err = kyber1024.NewKeyPair(rand.Reader).Decapsulate(ciphertext) // Using the Kyber decapsulation to get the shared secret
+	if err != nil {
+		return ss, err
+	}
+	return ss, nil
+}
+
+var errInvalidPublicKey = errors.New("invalid public key")
+
