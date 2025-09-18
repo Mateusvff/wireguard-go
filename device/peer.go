@@ -75,32 +75,14 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 		return nil, errors.New("too many peers")
 	}
 
-	// create peer
 	peer := new(Peer)
 
-	// Gerar chave Noise para o peer
-    peer.privateKey, err := newPrivateKey()  // Geração da chave privada Noise
-    if err != nil {
-        return nil, fmt.Errorf("falha ao gerar chave privada Noise: %v", err)
-    }
-    peer.publicKey = peer.privateKey.publicKey()  // Gerar chave pública associada
-
-    // Verificar se a chave pública Noise foi gerada corretamente
-    if peer.publicKey == (NoisePublicKey{}) {
-        return nil, fmt.Errorf("falha ao gerar chave pública Noise para o Peer")
-    }
-
-    // Gerar chave Kyber para o peer
-    peer.mlkemPrivateKey, err = newKyberPrivateKey()  // Geração da chave privada Kyber
-    if err != nil {
-        return nil, fmt.Errorf("falha ao gerar chave privada Kyber: %v", err)
-    }
-    peer.mlkemPublicKey = *peer.mlkemPrivateKey.publicKey()  // Gerar chave pública associada
-
-    // Verificar se a chave pública Kyber foi gerada corretamente
-    if peer.mlkemPublicKey == (MLKEMPublicKey{}) {
-        return nil, fmt.Errorf("falha ao gerar chave pública Kyber para o Peer")
-    }
+	// pré-computa a DH estática para o peer remoto e salva a remota
+	hs := &peer.handshake
+	hs.mutex.Lock()
+	hs.precomputedStaticStatic, _ = device.staticIdentity.privateKey.sharedSecret(pk)
+	hs.remoteStatic = pk
+	hs.mutex.Unlock()
 
 	peer.cookieGenerator.Init(pk)
 	peer.device = device
@@ -109,17 +91,10 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	peer.queue.staged = make(chan *QueueOutboundElementsContainer, QueueStagedSize)
 
 	// map public key
-	_, ok := device.peers.keyMap[pk]
-	if ok {
+	if _, ok := device.peers.keyMap[pk]; ok {
 		return nil, errors.New("adding existing peer")
 	}
-
-	//  pré-computa a chave de compartilhamento estático para o peer
-	handshake := &peer.handshake
-    handshake.mutex.Lock()
-    handshake.precomputedStaticStatic, _ = device.staticIdentity.privateKey.sharedSecret(pk)
-    handshake.remoteStatic = pk
-    handshake.mutex.Unlock()
+	device.peers.keyMap[pk] = peer
 
 	// reset endpoint
 	peer.endpoint.Lock()
@@ -130,9 +105,6 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 
 	// init timers
 	peer.timersInit()
-
-	// add
-	device.peers.keyMap[pk] = peer
 
 	return peer, nil
 }
@@ -169,13 +141,7 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 }
 
 func (peer *Peer) String() string {
-	// The awful goo that follows is identical to:
-	//
-	//   base64Key := base64.StdEncoding.EncodeToString(peer.handshake.remoteStatic[:])
-	//   abbreviatedKey := base64Key[0:4] + "…" + base64Key[39:43]
-	//   return fmt.Sprintf("peer(%s)", abbreviatedKey)
-	//
-	// except that it is considerably more efficient.
+	// base64 abreviado do remoteStatic, bem eficiente
 	src := peer.handshake.remoteStatic
 	b64 := func(input byte) byte {
 		return input + 'A' + byte(((25-int(input))>>8)&6) - byte(((51-int(input))>>8)&75) - byte(((61-int(input))>>8)&15) + byte(((62-int(input))>>8)&3)
@@ -195,12 +161,10 @@ func (peer *Peer) String() string {
 }
 
 func (peer *Peer) Start() {
-	// should never start a peer on a closed device
 	if peer.device.isClosed() {
 		return
 	}
 
-	// prevent simultaneous start/stop operations
 	peer.state.Lock()
 	defer peer.state.Unlock()
 
@@ -211,7 +175,6 @@ func (peer *Peer) Start() {
 	device := peer.device
 	device.log.Verbosef("%v - Starting", peer)
 
-	// reset routine state
 	peer.stopping.Wait()
 	peer.stopping.Add(2)
 
@@ -219,15 +182,13 @@ func (peer *Peer) Start() {
 	peer.handshake.lastSentHandshake = time.Now().Add(-(RekeyTimeout + time.Second))
 	peer.handshake.mutex.Unlock()
 
-	peer.device.queue.encryption.wg.Add(1) // keep encryption queue open for our writes
+	peer.device.queue.encryption.wg.Add(1)
 
 	peer.timersStart()
 
 	device.flushInboundQueue(peer.queue.inbound)
 	device.flushOutboundQueue(peer.queue.outbound)
 
-	// Use the device batch size, not the bind batch size, as the device size is
-	// the size of the batch pools.
 	batchSize := peer.device.BatchSize()
 	go peer.RoutineSequentialSender(batchSize)
 	go peer.RoutineSequentialReceiver(batchSize)
@@ -238,8 +199,6 @@ func (peer *Peer) Start() {
 func (peer *Peer) ZeroAndFlushAll() {
 	device := peer.device
 
-	// clear key pairs
-
 	keypairs := &peer.keypairs
 	keypairs.Lock()
 	device.DeleteKeypair(keypairs.previous)
@@ -249,8 +208,6 @@ func (peer *Peer) ZeroAndFlushAll() {
 	keypairs.current = nil
 	keypairs.next.Store(nil)
 	keypairs.Unlock()
-
-	// clear handshake state
 
 	handshake := &peer.handshake
 	handshake.mutex.Lock()
@@ -291,11 +248,10 @@ func (peer *Peer) Stop() {
 	peer.device.log.Verbosef("%v - Stopping", peer)
 
 	peer.timersStop()
-	// Signal that RoutineSequentialSender and RoutineSequentialReceiver should exit.
 	peer.queue.inbound.c <- nil
 	peer.queue.outbound.c <- nil
 	peer.stopping.Wait()
-	peer.device.queue.encryption.wg.Done() // no more writes to encryption queue from us
+	peer.device.queue.encryption.wg.Done()
 
 	peer.ZeroAndFlushAll()
 }
