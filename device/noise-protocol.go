@@ -326,7 +326,8 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 
 	// mix classic (ss) and post-quantum secret (mlkemSecret) into a single secret
 	var combinedSecret [blake2s.Size]byte
-	KDF2(&combinedSecret, nil, ss[:], mlkemSecret)
+	var dummy [blake2s.Size]byte
+	KDF2(&combinedSecret, &dummy, ss[:], mlkemSecret)
 
 	// from this point on, use the combined secret to feed the Noise KDF
 	KDF2(
@@ -434,7 +435,8 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 
 	// mix classic (ss) and post-quantum secret (mlkemSecret) into a single secret
 	var combinedSecret [blake2s.Size]byte
-	KDF2(&combinedSecret, nil, ss[:], mlkemSecret)
+	var dummy [blake2s.Size]byte
+	KDF2(&combinedSecret, &dummy, ss[:], mlkemSecret)
 
 	// main chainKey is now updated with the combined secret
 	KDF2(&chainKey, &key, chainKey[:], combinedSecret[:])
