@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudflare/circl/kem/kyber/kyber1024"
+
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/conn/bindtest"
 	"golang.zx2c4.com/wireguard/tun"
@@ -189,6 +191,9 @@ func genTestPair(tb testing.TB, realSocket bool) (pair testPair) {
 		// The device is ready. Close it when the test completes.
 		tb.Cleanup(p.dev.Close)
 	}
+
+	installMLKEMKeys(tb, &pair)
+
 	return
 }
 
@@ -473,4 +478,154 @@ func TestBatchSize(t *testing.T) {
 	if want, got := 128, d.BatchSize(); got != want {
 		t.Errorf("expected batch size %d, got %d", want, got)
 	}
+}
+	// instala ML-KEM nos dois lados do par de teste
+func installMLKEMKeys(t testing.TB, pair *testPair) {
+    t.Helper()
+    scheme := kyber1024.Scheme()
+    pk0, sk0, err := scheme.GenerateKeyPair()
+    if err != nil { t.Fatal(err) }
+    pk0b, _ := pk0.MarshalBinary()
+    sk0b, _ := sk0.MarshalBinary()
+    pk1, sk1, err := scheme.GenerateKeyPair()
+    if err != nil { t.Fatal(err) }
+    pk1b, _ := pk1.MarshalBinary()
+    sk1b, _ := sk1.MarshalBinary()
+
+    if err := pair[0].dev.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(sk0b))); err != nil { t.Fatal(err) }
+    if err := pair[1].dev.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(sk1b))); err != nil { t.Fatal(err) }
+    var pub0, pub1 NoisePublicKey
+    for k := range pair[0].dev.peers.keyMap { pub0 = k; break }
+    for k := range pair[1].dev.peers.keyMap { pub1 = k; break } 
+    cfgPeer0 := uapiCfg(
+        "public_key", hex.EncodeToString(pub0[:]),
+        "mlkem_public_key", hex.EncodeToString(pk1b), 
+    )
+    cfgPeer1 := uapiCfg(
+        "public_key", hex.EncodeToString(pub1[:]),
+        "mlkem_public_key", hex.EncodeToString(pk0b), 
+    )
+    if err := pair[0].dev.IpcSet(cfgPeer0); err != nil { t.Fatal(err) }
+    if err := pair[1].dev.IpcSet(cfgPeer1); err != nil { t.Fatal(err) }
+}
+
+// 1) Geração de chaves ML-KEM
+func TestMLKEMKeyGeneration(t *testing.T) {
+    pub, priv, err := GenerateQuantumKeyPair()
+    if err != nil { t.Fatal(err) }
+
+    scheme := kyber1024.Scheme()
+    if len(pub) != scheme.PublicKeySize() {
+        t.Fatalf("pub size mismatch: got %d, want %d", len(pub), scheme.PublicKeySize())
+    }
+    if len(priv) != scheme.PrivateKeySize() {
+        t.Fatalf("priv size mismatch: got %d, want %d", len(priv), scheme.PrivateKeySize())
+    }
+
+    // Unmarshal deve funcionar
+    if _, err := scheme.UnmarshalBinaryPublicKey(pub); err != nil { t.Fatal(err) }
+    if _, err := scheme.UnmarshalBinaryPrivateKey(priv); err != nil { t.Fatal(err) }
+}
+
+// 2) Encaps/Decaps produz o mesmo segredo
+func TestMLKEMEncapDecap(t *testing.T) {
+    scheme := kyber1024.Scheme()
+    pk, sk, err := scheme.GenerateKeyPair()
+    if err != nil { t.Fatal(err) }
+
+    ct, ssEnc, err := scheme.Encapsulate(pk)
+    if err != nil { t.Fatal(err) }
+    ssDec, err := scheme.Decapsulate(sk, ct)
+    if err != nil { t.Fatal(err) }
+
+    if !bytes.Equal(ssEnc, ssDec) {
+        t.Fatal("ML-KEM shared secrets differ")
+    }
+}
+
+// 3) Handshake completo com ML-KEM integrado (derivação de chaves de sessão)
+func TestNoiseHandshakeWithMLKEM(t *testing.T) {
+    // cria dois devices com tun/bind reais o suficiente p/ handshake em memória
+    skA, _ := newPrivateKey()
+    skB, _ := newPrivateKey()
+
+    tunA := tuntest.NewChannelTUN()
+    tunB := tuntest.NewChannelTUN()
+
+    devA := NewDevice(tunA.TUN(), conn.NewDefaultBind(), NewLogger(LogLevelError, ""))
+    devB := NewDevice(tunB.TUN(), conn.NewDefaultBind(), NewLogger(LogLevelError, ""))
+
+    defer devA.Close()
+    defer devB.Close()
+
+    // configura Noise keys
+    if err := devA.SetPrivateKey(skA); err != nil { t.Fatal(err) }
+    if err := devB.SetPrivateKey(skB); err != nil { t.Fatal(err) }
+
+    // cria peers (um apontando pro outro)
+    peerB, err := devA.NewPeer(skB.publicKey())
+    if err != nil { t.Fatal(err) }
+    peerA, err := devB.NewPeer(skA.publicKey())
+    if err != nil { t.Fatal(err) }
+
+    // gera chaves ML-KEM e injeta
+    scheme := kyber1024.Scheme()
+    pkA, skAkem, _ := scheme.GenerateKeyPair()
+    pkB, skBkem, _ := scheme.GenerateKeyPair()
+    pkAb, _ := pkA.MarshalBinary()
+    pkBb, _ := pkB.MarshalBinary()
+    skAb, _ := skAkem.MarshalBinary()
+    skBb, _ := skBkem.MarshalBinary()
+
+    // via UAPI para usar o mesmo caminho de produção
+    if err := devA.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(skAb))); err != nil { t.Fatal(err) }
+    if err := devB.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(skBb))); err != nil { t.Fatal(err) }
+
+    // amarra a ML-KEM pub do remoto em cada peer
+    if err := devA.IpcSet(uapiCfg("public_key", hex.EncodeToString(peerB.handshake.remoteStatic[:]),
+                                  "mlkem_public_key", hex.EncodeToString(pkBb))); err != nil { t.Fatal(err) }
+    if err := devB.IpcSet(uapiCfg("public_key", hex.EncodeToString(peerA.handshake.remoteStatic[:]),
+                                  "mlkem_public_key", hex.EncodeToString(pkAb))); err != nil { t.Fatal(err) }
+
+    // inicia peers (como no teste de Noise clássico)
+    peerA.Start()
+    peerB.Start()
+
+    // 3.1 initiation
+    msg1, err := devA.CreateMessageInitiation(peerB)
+    if err != nil { t.Fatal(err) }
+    if p := devB.ConsumeMessageInitiation(msg1); p == nil {
+        t.Fatal("handshake failed at initiation (ML-KEM)")
+    }
+
+    // 3.2 response
+    msg2, err := devB.CreateMessageResponse(peerA)
+    if err != nil { t.Fatal(err) }
+    if p := devA.ConsumeMessageResponse(msg2); p == nil {
+        t.Fatal("handshake failed at response (ML-KEM)")
+    }
+
+    // 3.3 deriva chaves de sessão em ambos os lados
+    if err := peerA.BeginSymmetricSession(); err != nil { t.Fatal(err) }
+    if err := peerB.BeginSymmetricSession(); err != nil { t.Fatal(err) }
+
+    // 3.4 valida criptografia / decriptação nas duas direções
+    keyA := peerA.keypairs.next.Load()
+    keyB := peerB.keypairs.current
+
+    msg := []byte("pqc wireguard ok")
+    var nonce [12]byte
+
+    // A -> B
+    out := keyA.send.Seal(nil, nonce[:], msg, nil)
+    plain, err := keyB.receive.Open(nil, nonce[:], out, nil)
+    if err != nil { t.Fatal(err) }
+    if !bytes.Equal(plain, msg) { t.Fatal("A->B decrypt mismatch") }
+
+    // B -> A
+    out = keyB.send.Seal(nil, nonce[:], msg, nil)
+    plain, err = keyA.receive.Open(nil, nonce[:], out, nil)
+    if err != nil { t.Fatal(err) }
+    if !bytes.Equal(plain, msg) { t.Fatal("B->A decrypt mismatch") }
+
 }
