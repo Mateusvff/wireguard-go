@@ -87,3 +87,15 @@ type (
 	MLKEMPublicKey  [MLKEMPublicKeySize]byte
 	MLKEMPrivateKey [MLKEMPrivateKeySize]byte
 )
+
+const (
+	MLDSAPublicKeySize  = 2592
+	MLDSAPrivateKeySize = 4864
+	MLDSASignatureSize  = 4595
+)
+
+type (
+	MLDSAPublicKey  [MLDSAPublicKeySize]byte
+	MLDSAPrivateKey [MLDSAPrivateKeySize]byte
+	MLDSASignature  [MLDSASignatureSize]byte
+)
