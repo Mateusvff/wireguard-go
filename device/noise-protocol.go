@@ -62,13 +62,13 @@ const (
 )
 
 const (
-	MessageInitiationSize      = 148 + (MLKEMCiphertextSize + poly1305.TagSize) // size of handshake initiation message
-	MessageResponseSize        = 92                                             // size of response message
-	MessageCookieReplySize     = 64                                             // size of cookie reply message
-	MessageTransportHeaderSize = 16                                             // size of data preceding content in transport message
-	MessageTransportSize       = MessageTransportHeaderSize + poly1305.TagSize  // size of empty transport
-	MessageKeepaliveSize       = MessageTransportSize                           // size of keepalive
-	MessageHandshakeSize       = MessageInitiationSize                          // size of largest handshake related message
+	MessageInitiationSize      = 148 + (MLKEMCiphertextSize + poly1305.TagSize) + MLDSASignatureSize // size of handshake initiation message
+	MessageResponseSize        = 92                                                                  // size of response message
+	MessageCookieReplySize     = 64                                                                  // size of cookie reply message
+	MessageTransportHeaderSize = 16                                                                  // size of data preceding content in transport message
+	MessageTransportSize       = MessageTransportHeaderSize + poly1305.TagSize                       // size of empty transport
+	MessageKeepaliveSize       = MessageTransportSize                                                // size of keepalive
+	MessageHandshakeSize       = MessageInitiationSize                                               // size of largest handshake related message
 )
 
 const (
@@ -90,6 +90,7 @@ type MessageInitiation struct {
 	Static    [NoisePublicKeySize + poly1305.TagSize]byte
 	MLKEM     [MLKEMCiphertextSize + poly1305.TagSize]byte
 	Timestamp [tai64n.TimestampSize + poly1305.TagSize]byte
+	Signature MLDSASignature
 	MAC1      [blake2s.Size128]byte
 	MAC2      [blake2s.Size128]byte
 }
