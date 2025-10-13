@@ -132,8 +132,9 @@ func (msg *MessageInitiation) unmarshal(b []byte) error {
 	copy(msg.Static[:], b[8+len(msg.Ephemeral):])
 	copy(msg.MLKEM[:], b[8+len(msg.Ephemeral)+len(msg.Static):])
 	copy(msg.Timestamp[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM):])
-	copy(msg.MAC1[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):])
-	copy(msg.MAC2[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.MAC1):])
+	copy(msg.Signature[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):])
+	copy(msg.MAC1[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.Signature):])
+	copy(msg.MAC2[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.Signature)+len(msg.MAC1):])
 
 	return nil
 }
@@ -149,8 +150,9 @@ func (msg *MessageInitiation) marshal(b []byte) error {
 	copy(b[8+len(msg.Ephemeral):], msg.Static[:])
 	copy(b[8+len(msg.Ephemeral)+len(msg.Static):], msg.MLKEM[:])
 	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM):], msg.Timestamp[:])
-	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):], msg.MAC1[:])
-	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.MAC1):], msg.MAC2[:])
+	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):], msg.Signature[:])
+	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.Signature):], msg.MAC1[:])
+	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.Signature)+len(msg.MAC1):], msg.MAC2[:])
 
 	return nil
 }
