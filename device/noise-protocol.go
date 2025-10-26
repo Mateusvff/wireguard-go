@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cloudflare/circl/kem/kyber/kyber1024"
+	"github.com/cloudflare/circl/sign/dilithium/mode5"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"
@@ -62,13 +63,13 @@ const (
 )
 
 const (
-	MessageInitiationSize      = 148 + (MLKEMCiphertextSize + poly1305.TagSize) // size of handshake initiation message
-	MessageResponseSize        = 92                                             // size of response message
-	MessageCookieReplySize     = 64                                             // size of cookie reply message
-	MessageTransportHeaderSize = 16                                             // size of data preceding content in transport message
-	MessageTransportSize       = MessageTransportHeaderSize + poly1305.TagSize  // size of empty transport
-	MessageKeepaliveSize       = MessageTransportSize                           // size of keepalive
-	MessageHandshakeSize       = MessageInitiationSize                          // size of largest handshake related message
+	MessageInitiationSize      = 148 + (MLKEMCiphertextSize + poly1305.TagSize) + MLDSASignatureSize // size of handshake initiation message
+	MessageResponseSize        = 92                                                                  // size of response message
+	MessageCookieReplySize     = 64                                                                  // size of cookie reply message
+	MessageTransportHeaderSize = 16                                                                  // size of data preceding content in transport message
+	MessageTransportSize       = MessageTransportHeaderSize + poly1305.TagSize                       // size of empty transport
+	MessageKeepaliveSize       = MessageTransportSize                                                // size of keepalive
+	MessageHandshakeSize       = MessageInitiationSize                                               // size of largest handshake related message
 )
 
 const (
@@ -90,6 +91,7 @@ type MessageInitiation struct {
 	Static    [NoisePublicKeySize + poly1305.TagSize]byte
 	MLKEM     [MLKEMCiphertextSize + poly1305.TagSize]byte
 	Timestamp [tai64n.TimestampSize + poly1305.TagSize]byte
+	Signature MLDSASignature
 	MAC1      [blake2s.Size128]byte
 	MAC2      [blake2s.Size128]byte
 }
@@ -131,8 +133,9 @@ func (msg *MessageInitiation) unmarshal(b []byte) error {
 	copy(msg.Static[:], b[8+len(msg.Ephemeral):])
 	copy(msg.MLKEM[:], b[8+len(msg.Ephemeral)+len(msg.Static):])
 	copy(msg.Timestamp[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM):])
-	copy(msg.MAC1[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):])
-	copy(msg.MAC2[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.MAC1):])
+	copy(msg.Signature[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):])
+	copy(msg.MAC1[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.Signature):])
+	copy(msg.MAC2[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.Signature)+len(msg.MAC1):])
 
 	return nil
 }
@@ -148,8 +151,9 @@ func (msg *MessageInitiation) marshal(b []byte) error {
 	copy(b[8+len(msg.Ephemeral):], msg.Static[:])
 	copy(b[8+len(msg.Ephemeral)+len(msg.Static):], msg.MLKEM[:])
 	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM):], msg.Timestamp[:])
-	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):], msg.MAC1[:])
-	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.MAC1):], msg.MAC2[:])
+	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):], msg.Signature[:])
+	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.Signature):], msg.MAC1[:])
+	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp)+len(msg.Signature)+len(msg.MAC1):], msg.MAC2[:])
 
 	return nil
 }
@@ -223,6 +227,7 @@ type Handshake struct {
 	remoteIndex               uint32                   // index for sending
 	remoteStatic              NoisePublicKey           // long term key
 	remoteMLKEMStatic         MLKEMPublicKey           // long term remote ML-KEM static public key
+	remoteMLDSAStatic         MLDSAPublicKey           // long term remote ML-DSA static public key
 	remoteEphemeral           NoisePublicKey           // ephemeral public key
 	precomputedStaticStatic   [NoisePublicKeySize]byte // precomputed shared secret
 	lastTimestamp             tai64n.Timestamp
@@ -348,6 +353,21 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 
 	handshake.mixHash(msg.Timestamp[:])
 	handshake.state = handshakeInitiationCreated
+
+	signScheme := mode5.Scheme()
+	skSign, err := signScheme.UnmarshalBinaryPrivateKey(device.staticIdentity.mldsaPrivateKey[:])
+	if err != nil {
+		return nil, err
+	}
+
+	messageToSign := make([]byte, MessageInitiationSize)
+	if err := msg.marshal(messageToSign); err != nil {
+		return nil, err
+	}
+
+	signature := signScheme.Sign(skSign, messageToSign[:MessageInitiationSize-blake2s.Size128*2-MLDSASignatureSize], nil)
+	copy(msg.Signature[:], signature)
+
 	return &msg, nil
 }
 
@@ -388,6 +408,21 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 	// lookup peer
 	peer := device.LookupPeer(peerPK)
 	if peer == nil || !peer.isRunning.Load() {
+		return nil
+	}
+
+	signScheme := mode5.Scheme()
+	pkSign, err := signScheme.UnmarshalBinaryPublicKey(peer.handshake.remoteMLDSAStatic[:])
+	if err != nil {
+		return nil
+	}
+
+	messageToCheck := make([]byte, MessageInitiationSize)
+	if err := msg.marshal(messageToCheck); err != nil {
+		return nil
+	}
+
+	if !signScheme.Verify(pkSign, messageToCheck[:MessageInitiationSize-blake2s.Size128*2-MLDSASignatureSize], msg.Signature[:], nil) {
 		return nil
 	}
 

@@ -53,6 +53,8 @@ type Device struct {
 		publicKey       NoisePublicKey
 		mlkemPrivateKey MLKEMPrivateKey
 		mlkemPublicKey  MLKEMPublicKey
+		mldsaPrivateKey MLDSAPrivateKey
+		mldsaPublicKey  MLDSAPublicKey
 	}
 
 	peers struct {
