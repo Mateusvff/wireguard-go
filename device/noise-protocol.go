@@ -428,6 +428,21 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 		return nil
 	}
 
+	signScheme := mode5.Scheme()
+	pkSign, err := signScheme.UnmarshalBinaryPublicKey(peer.handshake.remoteMLDSAStatic[:])
+	if err != nil {
+		return nil
+	}
+
+	messageToCheck := make([]byte, MessageInitiationSize)
+	if err := msg.marshal(messageToCheck); err != nil {
+		return nil
+	}
+
+	if !signScheme.Verify(pkSign, messageToCheck[:MessageInitiationSize-blake2s.Size128*2-MLDSASignatureSize], msg.Signature[:], nil) {
+		return nil
+	}
+
 	handshake := &peer.handshake
 
 	// decrypt KEM ciphertext
