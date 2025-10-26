@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cloudflare/circl/kem/kyber/kyber1024"
+	"github.com/cloudflare/circl/sign/dilithium/mode5"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"
@@ -352,6 +353,21 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 
 	handshake.mixHash(msg.Timestamp[:])
 	handshake.state = handshakeInitiationCreated
+
+	signScheme := mode5.Scheme()
+	skSign, err := signScheme.UnmarshalBinaryPrivateKey(device.staticIdentity.mldsaPrivateKey[:])
+	if err != nil {
+		return nil, err
+	}
+
+	messageToSign := make([]byte, MessageInitiationSize)
+	if err := msg.marshal(messageToSign); err != nil {
+		return nil, err
+	}
+
+	signature := signScheme.Sign(skSign, messageToSign[:MessageInitiationSize-blake2s.Size128*2-MLDSASignatureSize], nil)
+	copy(msg.Signature[:], signature)
+
 	return &msg, nil
 }
 
