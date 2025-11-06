@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/cloudflare/circl/kem/kyber/kyber1024"
+	"github.com/cloudflare/circl/sign/dilithium/mode5"
+
 
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/conn/bindtest"
@@ -193,6 +195,7 @@ func genTestPair(tb testing.TB, realSocket bool) (pair testPair) {
 	}
 
 	installMLKEMKeys(tb, &pair)
+	installMLDSAKeys(tb, &pair)
 
 	return
 }
@@ -508,6 +511,34 @@ func installMLKEMKeys(t testing.TB, pair *testPair) {
     if err := pair[1].dev.IpcSet(cfgPeer1); err != nil { t.Fatal(err) }
 }
 
+func installMLDSAKeys(t testing.TB, pair *testPair) {
+    t.Helper()
+
+    dil := mode5.Scheme()
+    pk0, sk0, err := dil.GenerateKey()
+    if err != nil { t.Fatal(err) }
+    pk1, sk1, err := dil.GenerateKey()
+    if err != nil { t.Fatal(err) }
+
+    pk0b, _ := pk0.MarshalBinary()
+    sk0b, _ := sk0.MarshalBinary()
+    pk1b, _ := pk1.MarshalBinary()
+    sk1b, _ := sk1.MarshalBinary()
+
+    copy(pair[0].dev.staticIdentity.mldsaPrivateKey[:], sk0b)
+    copy(pair[1].dev.staticIdentity.mldsaPrivateKey[:], sk1b)
+
+    var peer0, peer1 *Peer
+    for _, p := range pair[0].dev.peers.keyMap { peer0 = p; break }
+    for _, p := range pair[1].dev.peers.keyMap { peer1 = p; break }
+    if peer0 == nil || peer1 == nil {
+        t.Fatal("não foi possível localizar peers para configurar MLDSA")
+    }
+
+    copy(peer0.handshake.remoteMLDSAStatic[:], pk1b)
+    copy(peer1.handshake.remoteMLDSAStatic[:], pk0b)
+}
+
 func TestMLKEMKeyGeneration(t *testing.T) {
     pub, priv, err := GenerateQuantumKeyPair()
     if err != nil { t.Fatal(err) }
@@ -576,6 +607,20 @@ func TestNoiseHandshakeWithMLKEM(t *testing.T) {
                                   "mlkem_public_key", hex.EncodeToString(pkBb))); err != nil { t.Fatal(err) }
     if err := devB.IpcSet(uapiCfg("public_key", hex.EncodeToString(peerA.handshake.remoteStatic[:]),
                                   "mlkem_public_key", hex.EncodeToString(pkAb))); err != nil { t.Fatal(err) }
+
+	dil := mode5.Scheme()
+    pkAS, skAS, _ := dil.GenerateKey()
+    pkBS, skBS, _ := dil.GenerateKey()
+    pkASb, _ := pkAS.MarshalBinary()
+    pkBSb, _ := pkBS.MarshalBinary()
+    skASb, _ := skAS.MarshalBinary()
+    skBSb, _ := skBS.MarshalBinary()
+
+    copy(devA.staticIdentity.mldsaPrivateKey[:], skASb)
+    copy(devB.staticIdentity.mldsaPrivateKey[:], skBSb)
+
+    copy(peerB.handshake.remoteMLDSAStatic[:], pkBSb) 
+    copy(peerA.handshake.remoteMLDSAStatic[:], pkASb) 
 
     peerA.Start()
     peerB.Start()
