@@ -94,6 +94,33 @@ func BenchmarkHandshakeWithMLKEM(b *testing.B) {
 		b.Fatal(err)
 	}
 
+	mldsaPubA, mldsaPrivA, err := GenerateMLDSAKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	mldsaPubB, mldsaPrivB, err := GenerateMLDSAKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	devA.staticIdentity.Lock()
+	copy(devA.staticIdentity.mldsaPrivateKey[:], mldsaPrivA)
+	copy(devA.staticIdentity.mldsaPublicKey[:], mldsaPubA)
+	devA.staticIdentity.Unlock()
+
+	devB.staticIdentity.Lock()
+	copy(devB.staticIdentity.mldsaPrivateKey[:], mldsaPrivB)
+	copy(devB.staticIdentity.mldsaPublicKey[:], mldsaPubB)
+	devB.staticIdentity.Unlock()
+
+	peerB.handshake.mutex.Lock()
+	copy(peerB.handshake.remoteMLDSAStatic[:], mldsaPubB)
+	peerB.handshake.mutex.Unlock()
+
+	peerA.handshake.mutex.Lock()
+	copy(peerA.handshake.remoteMLDSAStatic[:], mldsaPubA)
+	peerA.handshake.mutex.Unlock()
+
 	relaxFlood := func() {
 		peerA.handshake.mutex.Lock()
 		peerA.handshake.lastInitiationConsumption = time.Now().Add(-10 * time.Second)
@@ -197,6 +224,33 @@ func BenchmarkHandshakeHybrid(b *testing.B) {
 		b.Fatal("peer lookup failed (check IpcSet order)")
 	}
 
+	mldsaPubA, mldsaPrivA, err := GenerateMLDSAKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	mldsaPubB, mldsaPrivB, err := GenerateMLDSAKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	devA.staticIdentity.Lock()
+	copy(devA.staticIdentity.mldsaPrivateKey[:], mldsaPrivA)
+	copy(devA.staticIdentity.mldsaPublicKey[:], mldsaPubA)
+	devA.staticIdentity.Unlock()
+
+	devB.staticIdentity.Lock()
+	copy(devB.staticIdentity.mldsaPrivateKey[:], mldsaPrivB)
+	copy(devB.staticIdentity.mldsaPublicKey[:], mldsaPubB)
+	devB.staticIdentity.Unlock()
+
+	peerB.handshake.mutex.Lock()
+	copy(peerB.handshake.remoteMLDSAStatic[:], mldsaPubB)
+	peerB.handshake.mutex.Unlock()
+
+	peerA.handshake.mutex.Lock()
+	copy(peerA.handshake.remoteMLDSAStatic[:], mldsaPubA)
+	peerA.handshake.mutex.Unlock()
+
 	relax := func() {
 		peerA.handshake.mutex.Lock()
 		peerA.handshake.lastInitiationConsumption = time.Now().Add(-10 * time.Second)
@@ -250,7 +304,32 @@ func BenchmarkDataPlaneAEAD(b *testing.B) {
 	devB.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(skBb)))
 	devA.IpcSet(uapiCfg("public_key", hex.EncodeToString(peerB.handshake.remoteStatic[:]), "mlkem_public_key", hex.EncodeToString(pkBb)))
 	devB.IpcSet(uapiCfg("public_key", hex.EncodeToString(peerA.handshake.remoteStatic[:]), "mlkem_public_key", hex.EncodeToString(pkAb)))
+	mldsaPubA, mldsaPrivA, err := GenerateMLDSAKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	mldsaPubB, mldsaPrivB, err := GenerateMLDSAKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
 
+	devA.staticIdentity.Lock()
+	copy(devA.staticIdentity.mldsaPrivateKey[:], mldsaPrivA)
+	copy(devA.staticIdentity.mldsaPublicKey[:], mldsaPubA)
+	devA.staticIdentity.Unlock()
+
+	devB.staticIdentity.Lock()
+	copy(devB.staticIdentity.mldsaPrivateKey[:], mldsaPrivB)
+	copy(devB.staticIdentity.mldsaPublicKey[:], mldsaPubB)
+	devB.staticIdentity.Unlock()
+
+	peerB.handshake.mutex.Lock()
+	copy(peerB.handshake.remoteMLDSAStatic[:], mldsaPubB)
+	peerB.handshake.mutex.Unlock()
+
+	peerA.handshake.mutex.Lock()
+	copy(peerA.handshake.remoteMLDSAStatic[:], mldsaPubA)
+	peerA.handshake.mutex.Unlock()
 	msg1, _ := devA.CreateMessageInitiation(peerB)
 	devB.ConsumeMessageInitiation(msg1)
 	msg2, _ := devB.CreateMessageResponse(peerA)
@@ -276,72 +355,100 @@ func BenchmarkDataPlaneAEAD(b *testing.B) {
 }
 
 func BenchmarkDataPlaneAEADHybrid(b *testing.B) {
-	skA, _ := newPrivateKey()
-	skB, _ := newPrivateKey()
-	tunA := tuntest.NewChannelTUN()
-	tunB := tuntest.NewChannelTUN()
-	devA := NewDevice(tunA.TUN(), conn.NewDefaultBind(), NewLogger(LogLevelError, ""))
-	devB := NewDevice(tunB.TUN(), conn.NewDefaultBind(), NewLogger(LogLevelError, ""))
-	defer devA.Close()
-	defer devB.Close()
+    skA, _ := newPrivateKey()
+    skB, _ := newPrivateKey()
+    tunA := tuntest.NewChannelTUN()
+    tunB := tuntest.NewChannelTUN()
+    devA := NewDevice(tunA.TUN(), conn.NewDefaultBind(), NewLogger(LogLevelError, ""))
+    devB := NewDevice(tunB.TUN(), conn.NewDefaultBind(), NewLogger(LogLevelError, ""))
+    defer devA.Close()
+    defer devB.Close()
 
-	if err := devA.IpcSet(uapiCfg("private_key", hex.EncodeToString(skA[:]))); err != nil {
-		b.Fatal(err)
-	}
-	if err := devB.IpcSet(uapiCfg("private_key", hex.EncodeToString(skB[:]))); err != nil {
-		b.Fatal(err)
-	}
+    if err := devA.IpcSet(uapiCfg("private_key", hex.EncodeToString(skA[:]))); err != nil {
+        b.Fatal(err)
+    }
+    if err := devB.IpcSet(uapiCfg("private_key", hex.EncodeToString(skB[:]))); err != nil {
+        b.Fatal(err)
+    }
 
-	scheme := kyber1024.Scheme()
-	pkA, skAkem, _ := scheme.GenerateKeyPair()
-	pkB, skBkem, _ := scheme.GenerateKeyPair()
-	pkAb, _ := pkA.MarshalBinary()
-	pkBb, _ := pkB.MarshalBinary()
-	skAb, _ := skAkem.MarshalBinary()
-	skBb, _ := skBkem.MarshalBinary()
+    scheme := kyber1024.Scheme()
+    pkA, skAkem, _ := scheme.GenerateKeyPair()
+    pkB, skBkem, _ := scheme.GenerateKeyPair()
+    pkAb, _ := pkA.MarshalBinary()
+    pkBb, _ := pkB.MarshalBinary()
+    skAb, _ := skAkem.MarshalBinary()
+    skBb, _ := skBkem.MarshalBinary()
 
-	if err := devA.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(skAb))); err != nil {
-		b.Fatal(err)
-	}
-	if err := devB.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(skBb))); err != nil {
-		b.Fatal(err)
-	}
+    if err := devA.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(skAb))); err != nil {
+        b.Fatal(err)
+    }
+    if err := devB.IpcSet(uapiCfg("mlkem_private_key", hex.EncodeToString(skBb))); err != nil {
+        b.Fatal(err)
+    }
 
-	pkBNoise := skB.publicKey()
-	pkANoise := skA.publicKey()
-	if err := devA.IpcSet(uapiCfg("public_key", hex.EncodeToString(pkBNoise[:]), "mlkem_public_key", hex.EncodeToString(pkBb))); err != nil {
-		b.Fatal(err)
-	}
-	if err := devB.IpcSet(uapiCfg("public_key", hex.EncodeToString(pkANoise[:]), "mlkem_public_key", hex.EncodeToString(pkAb))); err != nil {
-		b.Fatal(err)
-	}
+    pkBNoise := skB.publicKey()
+    pkANoise := skA.publicKey()
+    if err := devA.IpcSet(uapiCfg("public_key", hex.EncodeToString(pkBNoise[:]), "mlkem_public_key", hex.EncodeToString(pkBb))); err != nil {
+        b.Fatal(err)
+    }
+    if err := devB.IpcSet(uapiCfg("public_key", hex.EncodeToString(pkANoise[:]), "mlkem_public_key", hex.EncodeToString(pkAb))); err != nil {
+        b.Fatal(err)
+    }
 
-	peerB := devA.LookupPeer(pkBNoise)
-	peerA := devB.LookupPeer(pkANoise)
-	if peerA == nil || peerB == nil {
-		b.Fatal("peer lookup failed (check IpcSet order)")
-	}
+    peerB := devA.LookupPeer(pkBNoise)
+    peerA := devB.LookupPeer(pkANoise)
+    if peerA == nil || peerB == nil {
+        b.Fatal("peer lookup failed (check IpcSet order)")
+    }
 
-	msg1, _ := devA.CreateMessageInitiation(peerB)
-	devB.ConsumeMessageInitiation(msg1)
-	msg2, _ := devB.CreateMessageResponse(peerA)
-	devA.ConsumeMessageResponse(msg2)
-	peerA.BeginSymmetricSession()
-	peerB.BeginSymmetricSession()
+    mldsaPubA, mldsaPrivA, err := GenerateMLDSAKeyPair()
+    if err != nil {
+        b.Fatal(err)
+    }
+    mldsaPubB, mldsaPrivB, err := GenerateMLDSAKeyPair()
+    if err != nil {
+        b.Fatal(err)
+    }
 
-	keyA := peerA.keypairs.next.Load()
-	keyB := peerB.keypairs.current
-	msg := bytes.Repeat([]byte{0x42}, 128)
-	var nonce [12]byte
+    devA.staticIdentity.Lock()
+    copy(devA.staticIdentity.mldsaPrivateKey[:], mldsaPrivA)
+    copy(devA.staticIdentity.mldsaPublicKey[:], mldsaPubA)
+    devA.staticIdentity.Unlock()
 
-	b.ReportAllocs()
-	b.SetBytes(int64(len(msg)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		out := keyA.send.Seal(nil, nonce[:], msg, nil)
-		_, err := keyB.receive.Open(nil, nonce[:], out, nil)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
+    devB.staticIdentity.Lock()
+    copy(devB.staticIdentity.mldsaPrivateKey[:], mldsaPrivB)
+    copy(devB.staticIdentity.mldsaPublicKey[:], mldsaPubB)
+    devB.staticIdentity.Unlock()
+
+    peerB.handshake.mutex.Lock()
+    copy(peerB.handshake.remoteMLDSAStatic[:], mldsaPubB)
+    peerB.handshake.mutex.Unlock()
+
+    peerA.handshake.mutex.Lock()
+    copy(peerA.handshake.remoteMLDSAStatic[:], mldsaPubA)
+    peerA.handshake.mutex.Unlock()
+
+    msg1, _ := devA.CreateMessageInitiation(peerB)
+    devB.ConsumeMessageInitiation(msg1)
+    msg2, _ := devB.CreateMessageResponse(peerA)
+    devA.ConsumeMessageResponse(msg2)
+    peerA.BeginSymmetricSession()
+    peerB.BeginSymmetricSession()
+
+    keyA := peerA.keypairs.next.Load()
+    keyB := peerB.keypairs.current
+    msg := bytes.Repeat([]byte{0x42}, 128)
+    var nonce [12]byte
+
+    b.ReportAllocs()
+    b.SetBytes(int64(len(msg)))
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        out := keyA.send.Seal(nil, nonce[:], msg, nil)
+        _, err := keyB.receive.Open(nil, nonce[:], out, nil)
+        if err != nil {
+            b.Fatal(err)
+        }
+    }
 }
+
