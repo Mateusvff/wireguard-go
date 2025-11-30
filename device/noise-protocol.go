@@ -131,6 +131,7 @@ func (msg *MessageInitiation) unmarshal(b []byte) error {
 	msg.Sender = binary.LittleEndian.Uint32(b[4:])
 	copy(msg.Ephemeral[:], b[8:])
 	copy(msg.Static[:], b[8+len(msg.Ephemeral):])
+  
 	copy(msg.MLKEM[:], b[8+len(msg.Ephemeral)+len(msg.Static):])
 	copy(msg.Timestamp[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM):])
 	copy(msg.Signature[:], b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):])
@@ -149,6 +150,7 @@ func (msg *MessageInitiation) marshal(b []byte) error {
 	binary.LittleEndian.PutUint32(b[4:], msg.Sender)
 	copy(b[8:], msg.Ephemeral[:])
 	copy(b[8+len(msg.Ephemeral):], msg.Static[:])
+
 	copy(b[8+len(msg.Ephemeral)+len(msg.Static):], msg.MLKEM[:])
 	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM):], msg.Timestamp[:])
 	copy(b[8+len(msg.Ephemeral)+len(msg.Static)+len(msg.MLKEM)+len(msg.Timestamp):], msg.Signature[:])
